@@ -12,6 +12,9 @@ namespace EProxyClient.Net
         private int Port = 8080;
         private SocketAsyncEventArgs AcceptArgs = new SocketAsyncEventArgs();
         private Stack<SocketAsyncEventArgs> ArgsStack = new Stack<SocketAsyncEventArgs>();
+        private short Count = 0;
+        public Dictionary<short, SocksClient> Clients = new Dictionary<short, SocksClient>();
+        public Tunnel Tunnel = new Tunnel();
 
         private SocksServer() { }
 
@@ -40,7 +43,7 @@ namespace EProxyClient.Net
                 Accept_Completed(Server, AcceptArgs);
             }
 
-            new SocksClient(client);
+            Clients.Add(Count,new SocksClient(Count++, client));
         }
 
         private void AllocateArgs()

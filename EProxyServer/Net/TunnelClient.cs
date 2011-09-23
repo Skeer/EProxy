@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using System.Collections.Generic;
 
 namespace EProxyServer.Net
 {
@@ -20,14 +21,22 @@ namespace EProxyServer.Net
         private MemoryStream OutputStream = new MemoryStream();
         private int OutstandingSends = 1;
 
-        private Socket Destination;
-        private string DestinationHost;
-        private int DestinationPort;
-        private SocketAsyncEventArgs DestinationSendArgs;
-        private SocketAsyncEventArgs DestinationReceiveArgs;
-        private MemoryStream DestinationInputStream;
-        private MemoryStream DestinationOutputStream;
-        private int DestinationOutstandingSends = 1;
+        public Dictionary<short, Destination> Destinations = new Dictionary<short,Destination>();
+        
+        /// 
+        /// multiple destinations per tunnelclient
+        /// destinations identified by short id
+        /// receive packet is:
+        ///   short len, byte[] encrypted
+        ///     encrypted is either:
+        ///       short id, short port, short len, string host
+        ///       short id, byte[] data
+        /// send packet is:
+        ///   short len, byte[] encrypted
+        ///     encrypted is:
+        ///       short id, byte[] data
+        /// destinationreceive:
+        ///   
 
         public TunnelClient(Socket client)
         {
@@ -81,74 +90,13 @@ namespace EProxyServer.Net
             {
                 try
                 {
-                    Console.WriteLine("Client disconnected from {0}.", Client.RemoteEndPoint);
-                }
-                catch
-                {
-                    Console.WriteLine("Client disconnected.");
-                }
-                Dispose();
-            }
-        }
-
-        private void DestinationSend_Completed(object sender, SocketAsyncEventArgs e)
-        {
-            if (Destination == null)
-                return;
-            //Console.WriteLine("Sent {0} bytes.", e.BytesTransferred);
-            Interlocked.Exchange(ref DestinationOutstandingSends, 1);
-            DestinationProcessOutput();
-        }
-
-        private void DestinationReceive_Completed(object sender, SocketAsyncEventArgs e)
-        {
-            if (Destination == null)
-                return;
-            if (e.SocketError == SocketError.Success && e.BytesTransferred > 0)
-            {
-                //Console.WriteLine("Received {0} bytes.", e.BytesTransferred);
-                lock (DestinationInputStream)
-                {
-                    long pos = DestinationInputStream.Position;
-                    DestinationInputStream.Position = DestinationInputStream.Length;
-                    DestinationInputStream.Write(e.Buffer, 0, e.BytesTransferred);
-                    DestinationInputStream.Position = pos;
-
-                }
-                DestinationProcessInput();
-
-                if (!Destination.ReceiveAsync(DestinationReceiveArgs))
-                {
-                    DestinationReceive_Completed(Destination, DestinationReceiveArgs);
-                }
-            }
-            else
-            {
-                try{
-                    Console.WriteLine("Tunnel disconnected from {0}.", Destination.RemoteEndPoint);
+                    Console.WriteLine("Tunnel disconnected from {0}.", Client.RemoteEndPoint);
                 }
                 catch
                 {
                     Console.WriteLine("Tunnel disconnected.");
                 }
                 Dispose();
-            }
-        }
-
-        private void DestinationProcessInput()
-        {
-            lock (DestinationInputStream)
-            {
-                if (DestinationInputStream.Length > DestinationInputStream.Position)
-                {
-                    byte[] buffer = new byte[DestinationInputStream.Length - DestinationInputStream.Position];
-                    DestinationInputStream.Read(buffer, 0, buffer.Length);
-                    DestinationInputStream.SetLength(0);
-
-                    Encrypt(buffer);
-
-                    Send(BitConverter.GetBytes((short)buffer.Length).Concat(buffer).ToArray());
-                }
             }
         }
 
@@ -172,54 +120,26 @@ namespace EProxyServer.Net
                             buffer = new byte[length];
                             InputStream.Read(buffer, 0, buffer.Length);
                             Decrypt(buffer);
-                            if (Destination == null)
+
+                            short id = BitConverter.ToInt16(buffer, 0);
+
+                            if (Destinations.ContainsKey(id))
                             {
-                                // short port
-                                // short length
-                                // string host
-                                DestinationPort = BitConverter.ToInt16(buffer, 0);
-                                length = BitConverter.ToInt16(buffer, 2);
-                                DestinationHost = UTF8Encoding.UTF8.GetString(buffer, 4, length);
-
-                                Destination = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-
-                                IPAddress address;
-                                if (!IPAddress.TryParse(DestinationHost, out address))
-                                {
-                                    address = Dns.GetHostAddresses(DestinationHost).First(x => x.AddressFamily == AddressFamily.InterNetwork);
-                                }
-
-                                IPEndPoint endPoint = new IPEndPoint(address, DestinationPort);
-                                Destination.Connect(endPoint);
-                                Console.WriteLine("Connected to destination at {0}.", endPoint);
-
-                                DestinationReceiveArgs = TunnelServer.Instance.PopArgs();
-                                DestinationSendArgs = TunnelServer.Instance.PopArgs();
-                                DestinationReceiveArgs.SetBuffer(new byte[1500], 0, 1500);
-
-                                DestinationReceiveArgs.Completed += DestinationReceive_Completed;
-                                DestinationSendArgs.Completed += DestinationSend_Completed;
-
-                                DestinationInputStream = new MemoryStream();
-                                DestinationOutputStream = new MemoryStream();
-
-                                if (!Destination.ReceiveAsync(DestinationReceiveArgs))
-                                {
-                                    DestinationReceive_Completed(Destination, DestinationReceiveArgs);
-                                }
+                                // standard tunnel
+                                Destinations[id].Send(buffer, 2, length - 2);
                             }
                             else
                             {
-                                // standard request packet
-                                lock (DestinationOutputStream)
+                                // new connection
+                                short port = BitConverter.ToInt16(buffer, 2);
+                                length = BitConverter.ToInt16(buffer, 4);
+                                if (length == buffer.Length - 6)
                                 {
-                                    pos = DestinationOutputStream.Position;
-                                    DestinationOutputStream.Position = DestinationOutputStream.Length;
-                                    DestinationOutputStream.Write(buffer, 0, buffer.Length);
-                                    DestinationOutputStream.Position = pos;
-                                }
+                                    string host = UTF8Encoding.UTF8.GetString(buffer, 6, length);
 
-                                DestinationProcessOutput();
+                                    Destinations.Add(id, new Destination(this, id, host, port));
+                                }
+                                // otherwise invalid (probably disposed connection)
                             }
                         }
                         else
@@ -238,28 +158,18 @@ namespace EProxyServer.Net
             }
         }
 
-        private void DestinationProcessOutput()
+        /// <summary>
+        /// Tunnels data to proxy client.
+        /// </summary>
+        /// <param name="id">ID of the destination.</param>
+        /// <param name="buffer">The data to send.</param>
+        public void Send(short id, byte[] buffer)
         {
-            if (DestinationOutputStream.Length == DestinationOutputStream.Position || Interlocked.Exchange(ref DestinationOutstandingSends, 0) != 1)
-                return;
+            buffer = BitConverter.GetBytes(id).Concat(buffer).ToArray();
+            Encrypt(buffer);
 
-            lock (DestinationOutputStream)
-            {
-                byte[] buffer = new byte[DestinationOutputStream.Length - DestinationOutputStream.Position];
-                DestinationOutputStream.Read(buffer, 0, buffer.Length);
-                DestinationOutputStream.SetLength(0);
-                DestinationSendArgs.SetBuffer(buffer, 0, buffer.Length);
-            }
+            buffer = BitConverter.GetBytes((short)buffer.Length).Concat(buffer).ToArray();
 
-            if (!Destination.SendAsync(DestinationSendArgs))
-            {
-                DestinationSend_Completed(Destination, DestinationSendArgs);
-            }
-        }
-
-        private void Send(byte[] buffer)
-        {
-            // buffer is already encrypted with short length head
             lock (OutputStream)
             {
                 long pos = OutputStream.Position;
@@ -352,36 +262,10 @@ namespace EProxyServer.Net
                         OutputStream = null;
                     }
 
-                    if (Destination != null)
+                    if (Destinations != null)
                     {
-                        Destination.Dispose();
-                        Destination = null;
-                    }
-
-                    if (DestinationSendArgs != null)
-                    {
-                        DestinationSendArgs.Completed -= DestinationSend_Completed;
-                        TunnelServer.Instance.PushArgs(DestinationSendArgs);
-                        DestinationSendArgs = null;
-                    }
-
-                    if (DestinationReceiveArgs != null)
-                    {
-                        DestinationReceiveArgs.Completed -= DestinationReceive_Completed;
-                        TunnelServer.Instance.PushArgs(DestinationReceiveArgs);
-                        DestinationReceiveArgs = null;
-                    }
-
-                    if (DestinationInputStream != null)
-                    {
-                        DestinationInputStream.Dispose();
-                        DestinationInputStream = null;
-                    }
-
-                    if (DestinationOutputStream != null)
-                    {
-                        DestinationOutputStream.Dispose();
-                        DestinationOutputStream = null;
+                        Destinations.Values.ToList().ForEach(x => x.Dispose());
+                        Destinations = null;
                     }
                 }
 

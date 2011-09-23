@@ -45,6 +45,7 @@
   <ItemGroup>
     <Compile Include="Net\SocksClient.cs" />
     <Compile Include="Net\SocksServer.cs" />
+    <Compile Include="Net\Tunnel.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

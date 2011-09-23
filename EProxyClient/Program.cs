@@ -7,7 +7,7 @@ namespace EProxyClient
         static void Main(string[] args)
         {
             Net.SocksServer.Instance.Run();
-            // asdf
+            
             while (Console.ReadLine() != "q") ;
         }
     }

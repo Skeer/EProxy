@@ -10,7 +10,8 @@ namespace EProxyClient.Net
 {
     class SocksClient : IDisposable
     {
-        private byte Key = 0x53;
+        private short ID;
+        private bool Initialized = false;
 
         private bool Disposed = false;
         private Socket Client;
@@ -19,18 +20,10 @@ namespace EProxyClient.Net
         private MemoryStream InputStream = new MemoryStream();
         private MemoryStream OutputStream = new MemoryStream();
         private int OutstandingSends = 1;
-
-        private Socket Tunnel;
-        private string TunnelHost = "skeerhouse.net";
-        private int TunnelPort = 8125;
-        private SocketAsyncEventArgs TunnelSendArgs;
-        private SocketAsyncEventArgs TunnelReceiveArgs;
-        private MemoryStream TunnelInputStream;
-        private MemoryStream TunnelOutputStream;
-        private int TunnelOutstandingSends = 1;
-
-        public SocksClient(Socket client)
+        
+        public SocksClient(short id, Socket client)
         {
+            ID = id;
             Client = client;
 
             SendArgs = SocksServer.Instance.PopArgs();
@@ -91,112 +84,27 @@ namespace EProxyClient.Net
             }
         }
 
-        private void TunnelSend_Completed(object sender, SocketAsyncEventArgs e)
-        {
-            if (Tunnel == null)
-                return;
-            //Console.WriteLine("Tunnel sent {0} bytes.", e.BytesTransferred);
-            Interlocked.Exchange(ref TunnelOutstandingSends, 1);
-            TunnelProcessOutput();
-        }
-
-        private void TunnelReceive_Completed(object sender, SocketAsyncEventArgs e)
-        {
-            if (Tunnel == null)
-                return;
-            if (e.SocketError == SocketError.Success && e.BytesTransferred > 0)
-            {
-                //Console.WriteLine("Tunnel received {0} bytes.", e.BytesTransferred);
-                lock (TunnelInputStream)
-                {
-                    long pos = TunnelInputStream.Position;
-                    TunnelInputStream.Position = TunnelInputStream.Length;
-                    TunnelInputStream.Write(e.Buffer, 0, e.BytesTransferred);
-                    TunnelInputStream.Position = pos;
-
-                }
-                TunnelProcessInput();
-
-                if (!Tunnel.ReceiveAsync(TunnelReceiveArgs))
-                {
-                    TunnelReceive_Completed(Tunnel, TunnelReceiveArgs);
-                }
-            }
-            else
-            {
-                try
-                {
-                    Console.WriteLine("Tunnel disconnected from {0}.", Tunnel.RemoteEndPoint);
-                }
-                catch
-                {
-                    Console.WriteLine("Tunnel disconnected.");
-                }
-                Dispose();
-            }
-        }
-
-        private void TunnelProcessInput()
-        {
-            lock (TunnelInputStream)
-            {
-                while (true)
-                {
-                    if (TunnelInputStream.Length - TunnelInputStream.Position >= 2)
-                    {
-                        long pos = TunnelInputStream.Position;
-                        byte[] buffer = new byte[2];
-                        TunnelInputStream.Read(buffer, 0, 2);
-                        short length = BitConverter.ToInt16(buffer, 0);
-
-                        if (TunnelInputStream.Length - TunnelInputStream.Position >= length)
-                        {
-                            buffer = new byte[length];
-                            TunnelInputStream.Read(buffer, 0, buffer.Length);
-
-                            Decrypt(buffer);
-
-                            Send(buffer);
-                        }
-                        else
-                        {
-                            TunnelInputStream.Position = pos;
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        break;
-                    }
-                }
-            }
-        }
-
-        private void Encrypt(byte[] buffer)
-        {
-            Crypt(buffer);
-        }
-
-        private void Decrypt(byte[] buffer)
-        {
-            Crypt(buffer);
-        }
-
-        private void Crypt(byte[] buffer)
-        {
-            for (int i = 0; i < buffer.Length; ++i)
-            {
-                buffer[i] ^= Key;
-            }
-        }
-
         private void ProcessInput()
         {
             lock (InputStream)
             {
                 while (true)
                 {
-                    if (Tunnel == null)
+                    if (Initialized)
+                    {
+                        if (InputStream.Length > InputStream.Position)
+                        {
+                            byte[] buffer = new byte[InputStream.Length - InputStream.Position];
+                            InputStream.Read(buffer, 0, buffer.Length);
+
+                            SocksServer.Instance.Tunnel.Send(ID, buffer);
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
+                    else
                     {
                         if (InputStream.Length - InputStream.Position >= 9)
                         {
@@ -223,62 +131,21 @@ namespace EProxyClient.Net
                                     }
                                 }
 
-                                Tunnel = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-                                IPAddress address;
-                                if (!IPAddress.TryParse(TunnelHost, out address))
-                                {
-                                    address = Dns.GetHostAddresses(TunnelHost).First(x => x.AddressFamily == AddressFamily.InterNetwork);
-                                }
-
-                                IPEndPoint endPoint = new IPEndPoint(address, TunnelPort);
-                                Tunnel.Connect(endPoint);
-                                Console.WriteLine("Connected to tunnel at {0}.", endPoint);
-
-                                TunnelReceiveArgs = SocksServer.Instance.PopArgs();
-                                TunnelSendArgs = SocksServer.Instance.PopArgs();
-                                TunnelReceiveArgs.SetBuffer(new byte[1500], 0, 1500);
-
-                                TunnelReceiveArgs.Completed += TunnelReceive_Completed;
-                                TunnelSendArgs.Completed += TunnelSend_Completed;
-
-                                TunnelInputStream = new MemoryStream();
-                                TunnelOutputStream = new MemoryStream();
-
-                                if (!Tunnel.ReceiveAsync(TunnelReceiveArgs))
-                                {
-                                    TunnelReceive_Completed(Tunnel, TunnelReceiveArgs);
-                                }
+                                
 
                                 buffer = BitConverter.GetBytes(port).Concat(BitConverter.GetBytes((short)ip.Length)).Concat(UTF8Encoding.UTF8.GetBytes(ip)).ToArray();
 
-                                Encrypt(buffer);
-                                TunnelSend(BitConverter.GetBytes((short)buffer.Length).Concat(buffer).ToArray());
+                                SocksServer.Instance.Tunnel.Send(ID, buffer);
 
                                 // Accepted packet
                                 Send(new byte[] { 0x00, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 });
+
+                                Initialized = true;
                             }
                         }
                         else
                         {
                             long pos = InputStream.Position;
-
-
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        if (InputStream.Length > InputStream.Position)
-                        {
-                            byte[] buffer = new byte[InputStream.Length - InputStream.Position];
-                            InputStream.Read(buffer, 0, buffer.Length);
-
-
-                            Encrypt(buffer);
-                            TunnelSend(BitConverter.GetBytes((short)buffer.Length).Concat(buffer).ToArray());
-                        }
-                        else
-                        {
                             break;
                         }
                     }
@@ -286,46 +153,16 @@ namespace EProxyClient.Net
             }
         }
 
-        private void TunnelSend(byte[] buffer)
+        public void Send(byte[] buffer, int offset = 0, int count = 0)
         {
-            lock (TunnelOutputStream)
-            {
-                long pos = TunnelOutputStream.Position;
-                TunnelOutputStream.Position = TunnelOutputStream.Length;
-                TunnelOutputStream.Write(buffer, 0, buffer.Length);
-                TunnelOutputStream.Position = pos;
-            }
+            if (count == 0)
+                count = buffer.Length - offset;
 
-            TunnelProcessOutput();
-        }
-
-        private void TunnelProcessOutput()
-        {
-            // 0 = used, 1 = free
-            if (TunnelOutputStream.Length == TunnelOutputStream.Position || Interlocked.Exchange(ref TunnelOutstandingSends, 0) != 1)
-                return;
-
-            lock (TunnelOutputStream)
-            {
-                byte[] buffer = new byte[TunnelOutputStream.Length - TunnelOutputStream.Position];
-                TunnelOutputStream.Read(buffer, 0, buffer.Length);
-                TunnelOutputStream.SetLength(0);
-                TunnelSendArgs.SetBuffer(buffer, 0, buffer.Length);
-            }
-
-            if (!Tunnel.SendAsync(TunnelSendArgs))
-            {
-                TunnelSend_Completed(Tunnel, TunnelSendArgs);
-            }
-        }
-
-        private void Send(byte[] buffer)
-        {
             lock (OutputStream)
             {
                 long pos = OutputStream.Position;
                 OutputStream.Position = OutputStream.Length;
-                OutputStream.Write(buffer, 0, buffer.Length);
+                OutputStream.Write(buffer, offset, count);
                 OutputStream.Position = pos;
             }
 
@@ -334,7 +171,7 @@ namespace EProxyClient.Net
 
         private void ProcessOutput()
         {
-            if (OutputStream.Length == OutputStream.Position || Interlocked.Exchange(ref OutstandingSends, 0) != 1)
+            if (Client == null || OutputStream.Length == OutputStream.Position || Interlocked.Exchange(ref OutstandingSends, 0) != 1)
                 return;
 
             lock (OutputStream)
@@ -395,37 +232,42 @@ namespace EProxyClient.Net
                         OutputStream = null;
                     }
 
-                    if (Tunnel != null)
+                    if (SocksServer.Instance.Clients.ContainsKey(ID))
                     {
-                        Tunnel.Dispose();
-                        Tunnel = null;
+                        SocksServer.Instance.Clients.Remove(ID);
                     }
 
-                    if (TunnelSendArgs != null)
-                    {
-                        TunnelSendArgs.Completed -= TunnelSend_Completed;
-                        SocksServer.Instance.PushArgs(TunnelSendArgs);
-                        TunnelSendArgs = null;
-                    }
+                    //if (Tunnel != null)
+                    //{
+                    //    Tunnel.Dispose();
+                    //    Tunnel = null;
+                    //}
 
-                    if (TunnelReceiveArgs != null)
-                    {
-                        TunnelReceiveArgs.Completed -= TunnelReceive_Completed;
-                        SocksServer.Instance.PushArgs(TunnelReceiveArgs);
-                        TunnelReceiveArgs = null;
-                    }
+                    //if (TunnelSendArgs != null)
+                    //{
+                    //    TunnelSendArgs.Completed -= TunnelSend_Completed;
+                    //    SocksServer.Instance.PushArgs(TunnelSendArgs);
+                    //    TunnelSendArgs = null;
+                    //}
 
-                    if (TunnelInputStream != null)
-                    {
-                        TunnelInputStream.Dispose();
-                        TunnelInputStream = null;
-                    }
+                    //if (TunnelReceiveArgs != null)
+                    //{
+                    //    TunnelReceiveArgs.Completed -= TunnelReceive_Completed;
+                    //    SocksServer.Instance.PushArgs(TunnelReceiveArgs);
+                    //    TunnelReceiveArgs = null;
+                    //}
 
-                    if (TunnelOutputStream != null)
-                    {
-                        TunnelOutputStream.Dispose();
-                        TunnelOutputStream = null;
-                    }
+                    //if (TunnelInputStream != null)
+                    //{
+                    //    TunnelInputStream.Dispose();
+                    //    TunnelInputStream = null;
+                    //}
+
+                    //if (TunnelOutputStream != null)
+                    //{
+                    //    TunnelOutputStream.Dispose();
+                    //    TunnelOutputStream = null;
+                    //}
                 }
 
                 Disposed = true;

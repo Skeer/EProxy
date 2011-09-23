@@ -43,6 +43,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Net\Destination.cs" />
     <Compile Include="Net\TunnelClient.cs" />
     <Compile Include="Net\TunnelServer.cs" />
     <Compile Include="Program.cs" />
