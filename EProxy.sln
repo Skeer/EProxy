@@ -1,0 +1,26 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 11.00
+# Visual Studio 2010
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EProxyClient", "EProxyClient\EProxyClient.csproj", "{B5009A5B-7017-47B4-9E02-95884E4EE55C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EProxyServer", "EProxyServer\EProxyServer.csproj", "{28729547-04D4-4729-A71A-5AD1701EF6B3}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x86 = Debug|x86
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B5009A5B-7017-47B4-9E02-95884E4EE55C}.Debug|x86.ActiveCfg = Debug|x86
+		{B5009A5B-7017-47B4-9E02-95884E4EE55C}.Debug|x86.Build.0 = Debug|x86
+		{B5009A5B-7017-47B4-9E02-95884E4EE55C}.Release|x86.ActiveCfg = Release|x86
+		{B5009A5B-7017-47B4-9E02-95884E4EE55C}.Release|x86.Build.0 = Release|x86
+		{28729547-04D4-4729-A71A-5AD1701EF6B3}.Debug|x86.ActiveCfg = Debug|x86
+		{28729547-04D4-4729-A71A-5AD1701EF6B3}.Debug|x86.Build.0 = Debug|x86
+		{28729547-04D4-4729-A71A-5AD1701EF6B3}.Release|x86.ActiveCfg = Release|x86
+		{28729547-04D4-4729-A71A-5AD1701EF6B3}.Release|x86.Build.0 = Release|x86
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
