@@ -31,7 +31,7 @@ namespace EProxyClient.Net
 
             SendArgs.Completed += Send_Completed;
             ReceiveArgs.Completed += Receive_Completed;
-            ReceiveArgs.SetBuffer(new byte[1500], 0, 1500);
+            ReceiveArgs.SetBuffer(new byte[16384], 0, 16384);
 
             if (!Client.ReceiveAsync(ReceiveArgs))
             {
@@ -74,11 +74,11 @@ namespace EProxyClient.Net
             {
                 try
                 {
-                    Console.WriteLine("Client disconnected from {0}.", Client.RemoteEndPoint);
+                    //Console.WriteLine("Client disconnected from {0}.", Client.RemoteEndPoint);
                 }
                 catch
                 {
-                    Console.WriteLine("Client disconnected.");
+                    //Console.WriteLine("Client disconnected.");
                 }
                 Dispose();
             }
@@ -96,6 +96,7 @@ namespace EProxyClient.Net
                         {
                             byte[] buffer = new byte[InputStream.Length - InputStream.Position];
                             InputStream.Read(buffer, 0, buffer.Length);
+                            InputStream.SetLength(0);
 
                             SocksServer.Instance.Tunnel.Send(ID, buffer);
                         }
@@ -172,7 +173,7 @@ namespace EProxyClient.Net
         private void ProcessOutput()
         {
             if (Client == null || OutputStream.Length == OutputStream.Position || Interlocked.Exchange(ref OutstandingSends, 0) != 1)
-                return;
+                return;            
 
             lock (OutputStream)
             {

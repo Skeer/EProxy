@@ -39,21 +39,28 @@ namespace EProxyServer.Net
             }
 
             IPEndPoint endPoint = new IPEndPoint(address, Port);
-            Client.Connect(endPoint);
-
-            ReceiveArgs = TunnelServer.Instance.PopArgs();
-            SendArgs = TunnelServer.Instance.PopArgs();
-            ReceiveArgs.SetBuffer(new byte[1500], 0, 1500);
-
-            ReceiveArgs.Completed += Receive_Completed;
-            SendArgs.Completed += Send_Completed;
-
-            InputStream = new MemoryStream();
-            OutputStream = new MemoryStream();
-
-            if (!Client.ReceiveAsync(ReceiveArgs))
+            try
             {
-                Receive_Completed(Client, ReceiveArgs);
+                Client.Connect(endPoint);
+
+                ReceiveArgs = TunnelServer.Instance.PopArgs();
+                SendArgs = TunnelServer.Instance.PopArgs();
+                ReceiveArgs.SetBuffer(new byte[1500], 0, 1500);
+
+                ReceiveArgs.Completed += Receive_Completed;
+                SendArgs.Completed += Send_Completed;
+
+                InputStream = new MemoryStream();
+                OutputStream = new MemoryStream();
+
+                if (!Client.ReceiveAsync(ReceiveArgs))
+                {
+                    Receive_Completed(Client, ReceiveArgs);
+                }
+            }
+            catch
+            {
+                Dispose();
             }
         }
 
@@ -130,11 +137,11 @@ namespace EProxyServer.Net
             {
                 try
                 {
-                    Console.WriteLine("Client disconnected from {0}.", Client.RemoteEndPoint);
+                    //Console.WriteLine("Client disconnected from {0}.", Client.RemoteEndPoint);
                 }
                 catch
                 {
-                    Console.WriteLine("Client disconnected.");
+                    //Console.WriteLine("Client disconnected.");
                 }
                 Dispose();
             }
@@ -150,6 +157,7 @@ namespace EProxyServer.Net
                     {
                         byte[] buffer = new byte[InputStream.Length - InputStream.Position];
                         InputStream.Read(buffer, 0, buffer.Length);
+                        InputStream.SetLength(0);
 
                         Parent.Send(ID, buffer);
                     }

@@ -11,7 +11,9 @@ namespace EProxyServer.Net
 {
     class TunnelClient
     {
-        private byte Key = 0x53;
+        private const byte Key = 0x53;
+        private const UInt32 KeyLarge32 = 0x53535353;
+        private const UInt64 KeyLarge64 = 0x5353535353535353;
 
         private bool Disposed = false;
         private Socket Client;
@@ -22,21 +24,19 @@ namespace EProxyServer.Net
         private int OutstandingSends = 1;
 
         public Dictionary<short, Destination> Destinations = new Dictionary<short,Destination>();
-        
-        /// 
-        /// multiple destinations per tunnelclient
-        /// destinations identified by short id
-        /// receive packet is:
-        ///   short len, byte[] encrypted
-        ///     encrypted is either:
-        ///       short id, short port, short len, string host
-        ///       short id, byte[] data
-        /// send packet is:
-        ///   short len, byte[] encrypted
-        ///     encrypted is:
-        ///       short id, byte[] data
-        /// destinationreceive:
-        ///   
+
+        /// <summary>
+        /// Crypts data.
+        /// </summary>
+        private static Action<byte[]> Crypt;
+
+        static TunnelClient()
+        {
+            if (Environment.Is64BitProcess)
+                Crypt = Crypt64;
+            else
+                Crypt = Crypt32;
+        }
 
         public TunnelClient(Socket client)
         {
@@ -133,7 +133,7 @@ namespace EProxyServer.Net
                                 // new connection
                                 short port = BitConverter.ToInt16(buffer, 2);
                                 length = BitConverter.ToInt16(buffer, 4);
-                                if (length == buffer.Length - 6)
+                                if (length == buffer.Length - 6 && length  < 128)
                                 {
                                     string host = UTF8Encoding.UTF8.GetString(buffer, 6, length);
 
@@ -151,6 +151,11 @@ namespace EProxyServer.Net
                     }
                     else
                     {
+                        if (InputStream.Position == InputStream.Length)
+                        {
+                            InputStream.SetLength(0);
+                        }
+
                         // not enough for packet length
                         break;
                     }
@@ -165,10 +170,19 @@ namespace EProxyServer.Net
         /// <param name="buffer">The data to send.</param>
         public void Send(short id, byte[] buffer)
         {
-            buffer = BitConverter.GetBytes(id).Concat(buffer).ToArray();
-            Encrypt(buffer);
+            byte[] packet = new byte[buffer.Length + 2];
+            Buffer.BlockCopy(BitConverter.GetBytes(id), 0, packet, 0, 2);
+            Buffer.BlockCopy(buffer, 0, packet, 2, buffer.Length);
 
-            buffer = BitConverter.GetBytes((short)buffer.Length).Concat(buffer).ToArray();
+            //buffer = BitConverter.GetBytes(id).Concat(buffer).ToArray(); // to slow
+            //Encrypt(buffer);
+            Encrypt(packet);
+
+            buffer = new byte[packet.Length + 2];
+            Buffer.BlockCopy(BitConverter.GetBytes((short)packet.Length), 0, buffer, 0, 2);
+            Buffer.BlockCopy(packet, 0, buffer, 2, packet.Length);
+
+            //buffer = BitConverter.GetBytes((short)buffer.Length).Concat(buffer).ToArray(); // to slow
 
             lock (OutputStream)
             {
@@ -200,21 +214,71 @@ namespace EProxyServer.Net
             }
         }
 
-        private void Encrypt(byte[] buffer)
+        private static void Encrypt(byte[] buffer)
         {
             Crypt(buffer);
         }
 
-        private void Decrypt(byte[] buffer)
+        private static void Decrypt(byte[] buffer)
         {
             Crypt(buffer);
         }
 
-        private void Crypt(byte[] buffer)
+        /// <summary>
+        /// Crypts buffer for 32-bit applications.
+        /// </summary>
+        /// <param name="buffer">The data to crypt.</param>
+        private static void Crypt32(byte[] buffer)
         {
-            for (int i = 0; i < buffer.Length; ++i)
+            int large = buffer.Length >> 2; // number of 4 byte chunks (drop last 2 bits aka / 4)
+            int left = buffer.Length & 3; // remaining bytes (logical AND of last 2 bits aka % 4)
+            unsafe
             {
-                buffer[i] ^= Key;
+                fixed (byte* bp = &buffer[0])
+                {
+                    UInt32* p = (UInt32*)bp; // retreives 4 bytes from bp
+                    while (--large >= 0)
+                    {
+                        *p ^= KeyLarge32; // xor 4 bytes
+                        ++p; // retrives next 4 bytes from bp
+                    }
+
+                    // p is left with 0 - 3 bytes
+                    byte* bb = (byte*)p; // retrives 1 byte from p
+                    while (--left >= 0)
+                    {
+                        *bb ^= Key; // xor 1 byte
+                        ++bb; // retrieves next 1 byte from p
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Crypts buffer for 64-bit applications.
+        /// </summary>
+        /// <param name="buffer">The data to crypt.</param>
+        private static void Crypt64(byte[] buffer)
+        {
+            int large = buffer.Length >> 3;
+            int left = buffer.Length & 7;
+            unsafe
+            {
+                fixed (byte* bp = &buffer[0])
+                {
+                    UInt64* p = (UInt64*)bp;
+                    while (--large >= 0)
+                    {
+                        *p ^= KeyLarge64;
+                        ++p;
+                    }
+                    byte* bb = (byte*)p;
+                    while (--left >= 0)
+                    {
+                        *bb ^= Key;
+                        ++bb;
+                    }
+                }
             }
         }
 

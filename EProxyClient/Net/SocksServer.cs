@@ -14,12 +14,27 @@ namespace EProxyClient.Net
         private Stack<SocketAsyncEventArgs> ArgsStack = new Stack<SocketAsyncEventArgs>();
         private short Count = 0;
         public Dictionary<short, SocksClient> Clients = new Dictionary<short, SocksClient>();
-        public Tunnel Tunnel = new Tunnel();
+        public Tunnel Tunnel;
 
         private SocksServer() { }
 
         public void Run()
         {
+            // Proxy settings
+            Console.Write("Use HTTP proxy [y/n]? ");
+            if (Console.ReadLine() == "y")
+            {
+                Console.Write("Proxy host: ");
+                string host = Console.ReadLine();
+                Console.Write("Proxy port: ");
+                int port = int.Parse(Console.ReadLine());
+                Tunnel = new Tunnel(host, port);
+            }
+            else
+            {
+                Tunnel = new Tunnel();
+            }
+
             AllocateArgs();
 
             Server.Bind(new IPEndPoint(IPAddress.Any, Port));
@@ -36,7 +51,7 @@ namespace EProxyClient.Net
         private void Accept_Completed(object sender, SocketAsyncEventArgs e)
         {
             Socket client = e.AcceptSocket;
-            Console.WriteLine("Accepted connection from {0}.", client.RemoteEndPoint);
+            //Console.WriteLine("Accepted connection from {0}.", client.RemoteEndPoint);
             e.AcceptSocket = null;
             if (!Server.AcceptAsync(AcceptArgs))
             {

@@ -11,16 +11,78 @@ namespace EProxyClient.Net
 {
     class Tunnel
     {
-        private byte Key = 0x53;
+        private const byte Key = 0x53;
+        private const UInt32 KeyLarge32 = 0x53535353;
+        private const UInt64 KeyLarge64 = 0x5353535353535353;
+
         private Socket Client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         private SocketAsyncEventArgs SendArgs = new SocketAsyncEventArgs();
         private SocketAsyncEventArgs ReceiveArgs = new SocketAsyncEventArgs();
         private MemoryStream InputStream = new MemoryStream();
         private MemoryStream OutputStream = new MemoryStream();
         private int OutstandingSends = 1;
+        private bool Proxy = false;
+
+        /// <summary>
+        /// Crypts data.
+        /// </summary>
+        private static Action<byte[]> Crypt;
 
         private string Host = "localhost";
         private int Port = 8125;
+
+        static Tunnel()
+        {
+            if (Environment.Is64BitProcess)
+                Crypt = Crypt64;
+            else
+                Crypt = Crypt32;
+        }
+
+        public Tunnel(string pHost, int pPort)
+        {
+            Proxy = true;
+            IPAddress address;
+            if (!IPAddress.TryParse(pHost, out address))
+            {
+                address = Dns.GetHostAddresses(pHost).First(x => x.AddressFamily == AddressFamily.InterNetwork);
+            }
+
+            IPEndPoint endPoint = new IPEndPoint(address, pPort);
+
+            Client.Connect(endPoint);
+            Console.WriteLine("Connected to proxy at {0}.", endPoint);
+
+            ReceiveArgs.SetBuffer(new byte[1500], 0, 1500);
+
+            ReceiveArgs.Completed += Receive_Completed;
+            SendArgs.Completed += Send_Completed;
+
+            if (!Client.ReceiveAsync(ReceiveArgs))
+            {
+                Receive_Completed(Client, ReceiveArgs);
+            }
+
+            SendProxyHello();
+        }
+
+        private void SendProxyHello()
+        {
+            // CONNECT host:port HTTP/1.1\r\n
+            // Host: host:port\r\n
+            // \r\n
+            byte[] buffer = UTF8Encoding.UTF8.GetBytes(string.Format("CONNECT {0}:{1} HTTP/1.1\r\nHost: {0}:{1}\r\n\r\n", Host, Port));
+
+            lock (OutputStream)
+            {
+                long pos = OutputStream.Position;
+                OutputStream.Position = OutputStream.Length;
+                OutputStream.Write(buffer, 0, buffer.Length);
+                OutputStream.Position = pos;
+            }
+
+            ProcessOutput();
+        }
 
         public Tunnel()
         {
@@ -92,11 +154,26 @@ namespace EProxyClient.Net
             }
         }
 
+        /// <summary>
+        /// Tunnels data to proxy server.
+        /// </summary>
+        /// <param name="id">ID of the destination.</param>
+        /// <param name="buffer">The data to send.</param>
         public void Send(short id, byte[] buffer)
         {
-            buffer = BitConverter.GetBytes(id).Concat(buffer).ToArray();
-            Encrypt(buffer);
-            buffer = BitConverter.GetBytes((short)buffer.Length).Concat(buffer).ToArray();
+            byte[] packet = new byte[buffer.Length + 2];
+            Buffer.BlockCopy(BitConverter.GetBytes(id), 0, packet, 0, 2);
+            Buffer.BlockCopy(buffer, 0, packet, 2, buffer.Length);
+
+            //buffer = BitConverter.GetBytes(id).Concat(buffer).ToArray(); // to slow
+            //Encrypt(buffer);
+            Encrypt(packet);
+
+            buffer = new byte[packet.Length + 2];
+            Buffer.BlockCopy(BitConverter.GetBytes((short)packet.Length), 0, buffer, 0, 2);
+            Buffer.BlockCopy(packet, 0, buffer, 2, packet.Length);
+
+            //buffer = BitConverter.GetBytes((short)buffer.Length).Concat(buffer).ToArray(); // to slow
 
             lock (OutputStream)
             {
@@ -128,21 +205,79 @@ namespace EProxyClient.Net
             }
         }
 
-        private void Encrypt(byte[] buffer)
+        private static void Encrypt(byte[] buffer)
         {
             Crypt(buffer);
         }
 
-        private void Decrypt(byte[] buffer)
+        private static void Decrypt(byte[] buffer)
         {
             Crypt(buffer);
         }
 
-        private void Crypt(byte[] buffer)
+        /*private void Crypt(byte[] buffer)
         {
             for (int i = 0; i < buffer.Length; ++i)
             {
                 buffer[i] ^= Key;
+            }
+        }*/
+
+        /// <summary>
+        /// Crypts buffer for 32-bit applications.
+        /// </summary>
+        /// <param name="buffer">The data to crypt.</param>
+        private static void Crypt32(byte[] buffer)
+        {
+            int large = buffer.Length >> 2; // number of 4 byte chunks (drop last 2 bits aka / 4)
+            int left = buffer.Length & 3; // remaining bytes (logical AND of last 2 bits aka % 4)
+            unsafe
+            {
+                fixed (byte* bp = &buffer[0])
+                {
+                    UInt32* p = (UInt32*)bp; // retreives 4 bytes from bp
+                    while (--large >= 0)
+                    {
+                        *p ^= KeyLarge32; // xor 4 bytes
+                        ++p; // retrives next 4 bytes from bp
+                    }
+
+                    // p is left with 0 - 3 bytes
+                    byte* bb = (byte*)p; // retrives 1 byte from p
+                    while (--left >= 0)
+                    {
+                        *bb ^= Key; // xor 1 byte
+                        ++bb; // retrieves next 1 byte from p
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Crypts buffer for 64-bit applications.
+        /// </summary>
+        /// <param name="buffer">The data to crypt.</param>
+        private  static void Crypt64(byte[] buffer)
+        {
+            int large = buffer.Length >> 3;
+            int left = buffer.Length & 7;
+            unsafe
+            {
+                fixed (byte* bp = &buffer[0])
+                {
+                    UInt64 * p = (UInt64*)bp;
+                    while (--large >= 0)
+                    {
+                        *p ^= KeyLarge64;
+                        ++p;
+                    }
+                    byte* bb = (byte*)p;
+                    while (--left >= 0)
+                    {
+                        *bb ^= Key;
+                        ++bb;
+                    }
+                }
             }
         }
 
@@ -168,7 +303,7 @@ namespace EProxyClient.Net
 
                             short id = BitConverter.ToInt16(buffer, 0);
 
-                            if (SocksServer.Instance.Clients.ContainsKey(id))
+                            if (SocksServer.Instance.Clients.ContainsKey(id) && SocksServer.Instance.Clients[id] != null)
                             {
                                 SocksServer.Instance.Clients[id].Send(buffer, 2, buffer.Length - 2);
                             }
@@ -181,6 +316,10 @@ namespace EProxyClient.Net
                     }
                     else
                     {
+                        if (InputStream.Length == InputStream.Position)
+                        {
+                            InputStream.SetLength(0);
+                        }
                         break;
                     }
                 }
