@@ -22,13 +22,14 @@ namespace EProxyClient.Net
         private MemoryStream OutputStream = new MemoryStream();
         private int OutstandingSends = 1;
         private bool Proxy = false;
+        private bool ProxyInitialized = false;
 
         /// <summary>
         /// Crypts data.
         /// </summary>
         private static Action<byte[]> Crypt;
 
-        private string Host = "localhost";
+        private string Host = "skeerhouse.net";
         private int Port = 8125;
 
         static Tunnel()
@@ -143,11 +144,17 @@ namespace EProxyClient.Net
             {
                 try
                 {
-                    Console.WriteLine("Tunnel disconnected from {0}.", Client.RemoteEndPoint);
+                    if (Proxy)
+                        Console.WriteLine("HTTP proxy disconnected from {0}.", Client.RemoteEndPoint);
+                    else
+                        Console.WriteLine("Tunnel disconnected from {0}.", Client.RemoteEndPoint);
                 }
                 catch
                 {
-                    Console.WriteLine("Tunnel disconnected.");
+                    if (Proxy)
+                        Console.WriteLine("HTTP proxy disconnected.");
+                    else
+                        Console.WriteLine("Tunnel disconnected.");
                 }
                 // Dispose();
                 // Tunnel must not disconnect
@@ -257,7 +264,7 @@ namespace EProxyClient.Net
         /// Crypts buffer for 64-bit applications.
         /// </summary>
         /// <param name="buffer">The data to crypt.</param>
-        private  static void Crypt64(byte[] buffer)
+        private static void Crypt64(byte[] buffer)
         {
             int large = buffer.Length >> 3;
             int left = buffer.Length & 7;
@@ -265,7 +272,7 @@ namespace EProxyClient.Net
             {
                 fixed (byte* bp = &buffer[0])
                 {
-                    UInt64 * p = (UInt64*)bp;
+                    UInt64* p = (UInt64*)bp;
                     while (--large >= 0)
                     {
                         *p ^= KeyLarge64;
@@ -287,40 +294,82 @@ namespace EProxyClient.Net
             {
                 while (true)
                 {
-                    if (InputStream.Length - InputStream.Position >= 2)
+                    if (Proxy && !ProxyInitialized)
                     {
-                        long pos = InputStream.Position;
-                        byte[] buffer = new byte[2];
-                        InputStream.Read(buffer, 0, 2);
-                        short length = BitConverter.ToInt16(buffer, 0);
-
-                        if (InputStream.Length - InputStream.Position >= length)
+                        // using proxy but not initialized
+                        if (InputStream.Length > InputStream.Position)
                         {
-                            buffer = new byte[length];
+                            long pos = InputStream.Position;
+                            byte[] buffer = new byte[InputStream.Length - InputStream.Position];
                             InputStream.Read(buffer, 0, buffer.Length);
-
-                            Decrypt(buffer);
-
-                            short id = BitConverter.ToInt16(buffer, 0);
-
-                            if (SocksServer.Instance.Clients.ContainsKey(id) && SocksServer.Instance.Clients[id] != null)
+                            string response = UTF8Encoding.UTF8.GetString(buffer);
+                            int length = response.IndexOf("\r\n\r\n");
+                            if (length != -1) // found
                             {
-                                SocksServer.Instance.Clients[id].Send(buffer, 2, buffer.Length - 2);
+                                length += 4;
+                                InputStream.Position = pos + length;
+                                if (response.Contains("Connection established"))
+                                {
+                                    Console.WriteLine("Connection established.");
+                                    ProxyInitialized = true;
+                                }
+                                else
+                                {
+                                    Console.WriteLine("Connection failed:");
+                                    Console.Write(response.Substring(0, length));
+                                    return;
+                                }
+                            }
+                            else
+                            {
+                                // incomplete packet
+                                InputStream.Position = pos;
+                                break;
                             }
                         }
                         else
                         {
-                            InputStream.Position = pos;
                             break;
                         }
                     }
                     else
                     {
-                        if (InputStream.Length == InputStream.Position)
+                        // proxy initialized or standard connection; doesnt matter
+                        if (InputStream.Length - InputStream.Position >= 2)
                         {
-                            InputStream.SetLength(0);
+                            long pos = InputStream.Position;
+                            byte[] buffer = new byte[2];
+                            InputStream.Read(buffer, 0, 2);
+                            short length = BitConverter.ToInt16(buffer, 0);
+
+                            if (InputStream.Length - InputStream.Position >= length)
+                            {
+                                buffer = new byte[length];
+                                InputStream.Read(buffer, 0, buffer.Length);
+
+                                Decrypt(buffer);
+
+                                short id = BitConverter.ToInt16(buffer, 0);
+
+                                if (SocksServer.Instance.Clients.ContainsKey(id) && SocksServer.Instance.Clients[id] != null)
+                                {
+                                    SocksServer.Instance.Clients[id].Send(buffer, 2, buffer.Length - 2);
+                                }
+                            }
+                            else
+                            {
+                                InputStream.Position = pos;
+                                break;
+                            }
                         }
-                        break;
+                        else
+                        {
+                            if (InputStream.Length == InputStream.Position)
+                            {
+                                InputStream.SetLength(0);
+                            }
+                            break;
+                        }
                     }
                 }
             }
