@@ -30,7 +30,7 @@ namespace EProxyClient.Net
         private static Action<byte[]> Crypt;
 
         private string Host = "skeerhouse.net";
-        private int Port = 8125;
+        private int Port = 443;
 
         static Tunnel()
         {
@@ -111,8 +111,6 @@ namespace EProxyClient.Net
 
         private void Send_Completed(object sender, SocketAsyncEventArgs e)
         {
-            if (Client == null)
-                return;
             //Console.WriteLine("Tunnel sent {0} bytes.", e.BytesTransferred);
             Interlocked.Exchange(ref OutstandingSends, 1);
             ProcessOutput();
@@ -120,8 +118,6 @@ namespace EProxyClient.Net
 
         private void Receive_Completed(object sender, SocketAsyncEventArgs e)
         {
-            if (Client == null)
-                return;
             if (e.SocketError == SocketError.Success && e.BytesTransferred > 0)
             {
                 //Console.WriteLine("Tunnel received {0} bytes.", e.BytesTransferred);
@@ -373,6 +369,25 @@ namespace EProxyClient.Net
                     }
                 }
             }
+        }
+
+        public void SendDisconnect(short id)
+        {
+            byte[] packet = BitConverter.GetBytes(id);
+            Encrypt(packet);
+            byte[] buffer = new byte[packet.Length + 2];
+            Buffer.BlockCopy(BitConverter.GetBytes((short)packet.Length), 0, buffer, 0, 2);
+            Buffer.BlockCopy(packet, 0, buffer, 2, packet.Length);
+
+            lock (OutputStream)
+            {
+                long pos = OutputStream.Position;
+                OutputStream.Position = OutputStream.Length;
+                OutputStream.Write(buffer, 0, buffer.Length);
+                OutputStream.Position = pos;
+            }
+
+            ProcessOutput();
         }
     }
 }

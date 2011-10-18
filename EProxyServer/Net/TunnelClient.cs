@@ -11,6 +11,7 @@ namespace EProxyServer.Net
 {
     class TunnelClient
     {
+        // Encrpytion keys (they are all the same)
         private const byte Key = 0x53;
         private const UInt32 KeyLarge32 = 0x53535353;
         private const UInt64 KeyLarge64 = 0x5353535353535353;
@@ -23,7 +24,7 @@ namespace EProxyServer.Net
         private MemoryStream OutputStream = new MemoryStream();
         private int OutstandingSends = 1;
 
-        public Dictionary<short, Destination> Destinations = new Dictionary<short,Destination>();
+        public Dictionary<short, Destination> Destinations = new Dictionary<short, Destination>();
 
         /// <summary>
         /// Crypts data.
@@ -32,6 +33,7 @@ namespace EProxyServer.Net
 
         static TunnelClient()
         {
+            // For speed improvements
             if (Environment.Is64BitProcess)
                 Crypt = Crypt64;
             else
@@ -57,46 +59,67 @@ namespace EProxyServer.Net
 
         private void Send_Completed(object sender, SocketAsyncEventArgs e)
         {
-            if (Client == null)
-                return;
-            //Console.WriteLine("Tunnel sent {0} bytes.", e.BytesTransferred);
-            Interlocked.Exchange(ref OutstandingSends, 1);
-            ProcessOutput();
+            try
+            {
+                //Console.WriteLine("Tunnel sent {0} bytes.", e.BytesTransferred);
+                Interlocked.Exchange(ref OutstandingSends, 1);
+                ProcessOutput();
+            }
+            catch
+            {
+                Disconnect();
+            }
         }
 
         private void Receive_Completed(object sender, SocketAsyncEventArgs e)
         {
-            if (Client == null)
-                return;
-            //Console.WriteLine("Tunnel received {0} bytes.", e.BytesTransferred);
-            if (e.SocketError == SocketError.Success && e.BytesTransferred > 0)
+            try
             {
-                lock (InputStream)
+                //Console.WriteLine("Tunnel received {0} bytes.", e.BytesTransferred);
+                if (e.SocketError == SocketError.Success && e.BytesTransferred > 0)
                 {
-                    long pos = InputStream.Position;
-                    InputStream.Position = InputStream.Length;
-                    InputStream.Write(e.Buffer, 0, e.BytesTransferred);
-                    InputStream.Position = pos;
+                    lock (InputStream)
+                    {
+                        long pos = InputStream.Position;
+                        InputStream.Position = InputStream.Length;
+                        InputStream.Write(e.Buffer, 0, e.BytesTransferred);
+                        InputStream.Position = pos;
 
+                    }
+                    ProcessInput();
+
+                    if (!Client.ReceiveAsync(ReceiveArgs))
+                    {
+                        Receive_Completed(Client, ReceiveArgs);
+                    }
                 }
-                ProcessInput();
-
-                if (!Client.ReceiveAsync(ReceiveArgs))
+                else
                 {
-                    Receive_Completed(Client, ReceiveArgs);
+                    throw new Exception();
                 }
             }
-            else
+            catch
             {
-                try
+                Disconnect();
+            }
+        }
+
+        private void Disconnect()
+        {
+            lock (this)
+            {
+                if (!Disposed)
                 {
-                    Console.WriteLine("Tunnel disconnected from {0}.", Client.RemoteEndPoint);
+                    try
+                    {
+                        Console.WriteLine("Tunnel disconnected from {0}.", Client.RemoteEndPoint);
+                    }
+                    catch
+                    {
+                        Console.WriteLine("Tunnel disconnected.");
+                    }
+                    Dispose();
                 }
-                catch
-                {
-                    Console.WriteLine("Tunnel disconnected.");
-                }
-                Dispose();
             }
         }
 
@@ -115,6 +138,12 @@ namespace EProxyServer.Net
                         byte[] buffer = new byte[2];
                         InputStream.Read(buffer, 0, buffer.Length);
                         short length = BitConverter.ToInt16(buffer, 0);
+                        //if (length < 0)
+                        //{
+                        //    Dispose();
+                        //    return;
+                        //}
+
                         if (InputStream.Length - InputStream.Position >= length)
                         {
                             buffer = new byte[length];
@@ -123,7 +152,14 @@ namespace EProxyServer.Net
 
                             short id = BitConverter.ToInt16(buffer, 0);
 
-                            if (Destinations.ContainsKey(id))
+                            if (length == 2)
+                            {
+                                if (Destinations.ContainsKey(id))
+                                {
+                                    Destinations[id].Disconnect(true);
+                                }
+                            }
+                            else if (Destinations.ContainsKey(id))
                             {
                                 // standard tunnel
                                 Destinations[id].Send(buffer, 2, length - 2);
@@ -133,7 +169,7 @@ namespace EProxyServer.Net
                                 // new connection
                                 short port = BitConverter.ToInt16(buffer, 2);
                                 length = BitConverter.ToInt16(buffer, 4);
-                                if (length == buffer.Length - 6 && length  < 128)
+                                if (length == buffer.Length - 6 && length < 128)
                                 {
                                     string host = UTF8Encoding.UTF8.GetString(buffer, 6, length);
 

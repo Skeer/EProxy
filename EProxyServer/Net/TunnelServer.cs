@@ -17,13 +17,17 @@ namespace EProxyServer.Net
 
         public void Run()
         {
+            // Setting up connections
             AllocateArgs();
 
+            // Preparing for conenctions
             Server.Bind(new IPEndPoint(IPAddress.Any, Port));
             Console.WriteLine("Bound to {0}.", Server.LocalEndPoint);
             Server.Listen(10);
             Console.WriteLine("Listening for incoming connections.");
             AcceptArgs.Completed += Accept_Completed;
+
+            // Start accepting connections
             if (!Server.AcceptAsync(AcceptArgs))
             {
                 Accept_Completed(Server, AcceptArgs);
@@ -48,9 +52,11 @@ namespace EProxyServer.Net
                 Accept_Completed(Server, AcceptArgs);
             }
 
+            // Start new client per connection
             new TunnelClient(client);
         }
 
+        // Memory management
         public SocketAsyncEventArgs PopArgs()
         {
             if (ArgsStack.Count > 0)

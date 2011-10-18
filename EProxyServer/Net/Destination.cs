@@ -25,6 +25,13 @@ namespace EProxyServer.Net
         private MemoryStream InputStream = new MemoryStream();
         private MemoryStream OutputStream = new MemoryStream();
 
+        /// <summary>
+        /// Create a new HTTP destination.
+        /// </summary>
+        /// <param name="parent">The connection that it belongs to.</param>
+        /// <param name="id">The ID of the connection.</param>
+        /// <param name="host">The hostname of the destination.</param>
+        /// <param name="port">The port of the destination</param>
         public Destination(TunnelClient parent, short id, string host, short port)
         {
             Parent = parent;
@@ -32,27 +39,34 @@ namespace EProxyServer.Net
             Host = host;
             Port = port;
 
+            // Getting IP address
             IPAddress address;
+            // In the form of "xxx.xxx.xxx.xxx"
             if (!IPAddress.TryParse(Host, out address))
             {
+                // In the form of "example.com"
                 address = Dns.GetHostAddresses(Host).First(x => x.AddressFamily == AddressFamily.InterNetwork);
             }
 
+            // Linking IP address and port
             IPEndPoint endPoint = new IPEndPoint(address, Port);
             try
             {
+                // Connecting to destination
                 Client.Connect(endPoint);
 
+                Console.WriteLine("Connected to destination at {0}.", endPoint);
+
+                // Preparing for send and receive
                 ReceiveArgs = TunnelServer.Instance.PopArgs();
                 SendArgs = TunnelServer.Instance.PopArgs();
                 ReceiveArgs.SetBuffer(new byte[1500], 0, 1500);
-
                 ReceiveArgs.Completed += Receive_Completed;
                 SendArgs.Completed += Send_Completed;
-
                 InputStream = new MemoryStream();
                 OutputStream = new MemoryStream();
 
+                // Begin receiving
                 if (!Client.ReceiveAsync(ReceiveArgs))
                 {
                     Receive_Completed(Client, ReceiveArgs);
@@ -60,6 +74,7 @@ namespace EProxyServer.Net
             }
             catch
             {
+                // Failed to connect, disposing
                 Dispose();
             }
         }
@@ -72,39 +87,86 @@ namespace EProxyServer.Net
 
         private void Send_Completed(object sender, SocketAsyncEventArgs e)
         {
-            if (Client == null)
-                return;
-            //Console.WriteLine("Sent {0} bytes.", e.BytesTransferred);
-            Interlocked.Exchange(ref OutstandingSends, 1);
-            ProcessOutput();
+            try
+            {
+                //Console.WriteLine("Sent {0} bytes.", e.BytesTransferred);
+
+                // Telling the program that ProcessOutput() has completed
+                // 1 = completed
+                // 0 = in progress
+                Interlocked.Exchange(ref OutstandingSends, 1);
+                ProcessOutput();
+            }
+            catch
+            {
+                Disconnect();
+            }
+        }
+
+        public void Disconnect(bool invoked = false)
+        {
+            lock (this)
+            {
+                if (!Disposed)
+                {
+                    try
+                    {
+                        if (invoked)
+                            Console.WriteLine("Disconnected from destination at {0}.", Client.RemoteEndPoint);
+                        else
+                        Console.WriteLine("Destination disconnected from {0}.", Client.RemoteEndPoint);
+                    }
+                    catch
+                    {
+                        if (invoked)
+                            Console.WriteLine("Disconnected from desnation.");
+                        else
+                            Console.WriteLine("Destination disconnected.");
+                    }
+                    // Disconnected
+                    Dispose();
+                }
+            }
         }
 
         public void Send(byte[] buffer, int offset, int count)
         {
-            lock (OutputStream)
+            try
             {
-                long pos = OutputStream.Position;
-                OutputStream.Position = OutputStream.Length;
-                OutputStream.Write(buffer, offset, count);
-                OutputStream.Position = pos;
-            }
+                // Making sure we don't modify OutputStream at the same time
+                lock (OutputStream)
+                {
+                    long pos = OutputStream.Position;
+                    OutputStream.Position = OutputStream.Length;
+                    // Write data to OutputStream
+                    OutputStream.Write(buffer, offset, count);
+                    OutputStream.Position = pos;
+                }
 
-            ProcessOutput();
+                ProcessOutput();
+            }
+            catch
+            {
+                Disconnect();
+            }
         }
 
         private void ProcessOutput()
         {
+            // Check if there is data, or ProcessOutput() is already running, stop if true
             if (OutputStream.Length == OutputStream.Position || Interlocked.Exchange(ref OutstandingSends, 0) != 1)
                 return;
 
             lock (OutputStream)
             {
                 byte[] buffer = new byte[OutputStream.Length - OutputStream.Position];
+                // Read all data
                 OutputStream.Read(buffer, 0, buffer.Length);
                 OutputStream.SetLength(0);
                 SendArgs.SetBuffer(buffer, 0, buffer.Length);
             }
 
+            // Send data
             if (!Client.SendAsync(SendArgs))
             {
                 Send_Completed(Client, SendArgs);
@@ -113,37 +175,37 @@ namespace EProxyServer.Net
 
         private void Receive_Completed(object sender, SocketAsyncEventArgs e)
         {
-            if (Client == null)
-                return;
-            if (e.SocketError == SocketError.Success && e.BytesTransferred > 0)
+            try
             {
-                //Console.WriteLine("Received {0} bytes.", e.BytesTransferred);
-                lock (InputStream)
+                // If receive was successful and there actually was data (0 bytes = disconnect)
+                if (e.SocketError == SocketError.Success && e.BytesTransferred > 0)
                 {
-                    long pos = InputStream.Position;
-                    InputStream.Position = InputStream.Length;
-                    InputStream.Write(e.Buffer, 0, e.BytesTransferred);
-                    InputStream.Position = pos;
+                    //Console.WriteLine("Received {0} bytes.", e.BytesTransferred);
+                    lock (InputStream)
+                    {
+                        long pos = InputStream.Position;
+                        InputStream.Position = InputStream.Length;
+                        // Writing data to InputStream, to be processed later
+                        InputStream.Write(e.Buffer, 0, e.BytesTransferred);
+                        InputStream.Position = pos;
 
+                    }
+                    ProcessInput();
+
+                    // Begin receiving again
+                    if (!Client.ReceiveAsync(ReceiveArgs))
+                    {
+                        Receive_Completed(Client, ReceiveArgs);
+                    }
                 }
-                ProcessInput();
-
-                if (!Client.ReceiveAsync(ReceiveArgs))
+                else
                 {
-                    Receive_Completed(Client, ReceiveArgs);
+                    throw new Exception();
                 }
             }
-            else
+            catch
             {
-                try
-                {
-                    //Console.WriteLine("Client disconnected from {0}.", Client.RemoteEndPoint);
-                }
-                catch
-                {
-                    //Console.WriteLine("Client disconnected.");
-                }
-                Dispose();
+                Disconnect();
             }
         }
 
@@ -153,12 +215,14 @@ namespace EProxyServer.Net
             {
                 while (true)
                 {
+                    // If there is data to process
                     if (InputStream.Length > InputStream.Position)
                     {
                         byte[] buffer = new byte[InputStream.Length - InputStream.Position];
                         InputStream.Read(buffer, 0, buffer.Length);
                         InputStream.SetLength(0);
 
+                        // Relay all data to the parent connection
                         Parent.Send(ID, buffer);
                     }
                     else

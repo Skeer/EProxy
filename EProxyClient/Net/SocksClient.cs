@@ -41,46 +41,67 @@ namespace EProxyClient.Net
 
         private void Send_Completed(object sender, SocketAsyncEventArgs e)
         {
-            if (Client == null)
-                return;
-            //Console.WriteLine("Sent {0} bytes.", e.BytesTransferred);
-            Interlocked.Exchange(ref OutstandingSends, 1);
-            ProcessOutput();
+            try
+            {
+                //Console.WriteLine("Sent {0} bytes.", e.BytesTransferred);
+                Interlocked.Exchange(ref OutstandingSends, 1);
+                ProcessOutput();
+            }
+            catch
+            {
+                Disconnect();
+            }
+        }
+
+        private void Disconnect()
+        {
+            lock (this)
+            {
+                if (!Disposed)
+                {
+                    try
+                    {
+                        Console.WriteLine("Client disconnected from {0}.", Client.RemoteEndPoint);
+                    }
+                    catch
+                    {
+                        Console.WriteLine("Client disconnected.");
+                    }
+                    Dispose();
+                }
+            }
         }
 
         private void Receive_Completed(object sender, SocketAsyncEventArgs e)
         {
-            if (Client == null)
-                return;
-            if (e.SocketError == SocketError.Success && e.BytesTransferred > 0)
+            try
             {
-                //Console.WriteLine("Received {0} bytes.", e.BytesTransferred);
-                lock (InputStream)
+                if (e.SocketError == SocketError.Success && e.BytesTransferred > 0)
                 {
-                    long pos = InputStream.Position;
-                    InputStream.Position = InputStream.Length;
-                    InputStream.Write(e.Buffer, 0, e.BytesTransferred);
-                    InputStream.Position = pos;
+                    //Console.WriteLine("Received {0} bytes.", e.BytesTransferred);
+                    lock (InputStream)
+                    {
+                        long pos = InputStream.Position;
+                        InputStream.Position = InputStream.Length;
+                        InputStream.Write(e.Buffer, 0, e.BytesTransferred);
+                        InputStream.Position = pos;
 
+                    }
+                    ProcessInput();
+
+                    if (!Client.ReceiveAsync(ReceiveArgs))
+                    {
+                        Receive_Completed(Client, ReceiveArgs);
+                    }
                 }
-                ProcessInput();
-
-                if (!Client.ReceiveAsync(ReceiveArgs))
+                else
                 {
-                    Receive_Completed(Client, ReceiveArgs);
+                    throw new Exception();
                 }
             }
-            else
+            catch
             {
-                try
-                {
-                    //Console.WriteLine("Client disconnected from {0}.", Client.RemoteEndPoint);
-                }
-                catch
-                {
-                    //Console.WriteLine("Client disconnected.");
-                }
-                Dispose();
+                Disconnect();
             }
         }
 
@@ -172,7 +193,7 @@ namespace EProxyClient.Net
 
         private void ProcessOutput()
         {
-            if (Client == null || OutputStream.Length == OutputStream.Position || Interlocked.Exchange(ref OutstandingSends, 0) != 1)
+            if (OutputStream.Length == OutputStream.Position || Interlocked.Exchange(ref OutstandingSends, 0) != 1)
                 return;            
 
             lock (OutputStream)
@@ -233,10 +254,7 @@ namespace EProxyClient.Net
                         OutputStream = null;
                     }
 
-                    if (SocksServer.Instance.Clients.ContainsKey(ID))
-                    {
-                        SocksServer.Instance.Clients.Remove(ID);
-                    }
+                    SocksServer.Instance.RemoveClient(ID);
 
                     //if (Tunnel != null)
                     //{

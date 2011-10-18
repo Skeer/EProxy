@@ -51,14 +51,14 @@ namespace EProxyClient.Net
         private void Accept_Completed(object sender, SocketAsyncEventArgs e)
         {
             Socket client = e.AcceptSocket;
-            //Console.WriteLine("Accepted connection from {0}.", client.RemoteEndPoint);
+            Console.WriteLine("Accepted connection from {0}.", client.RemoteEndPoint);
             e.AcceptSocket = null;
             if (!Server.AcceptAsync(AcceptArgs))
             {
                 Accept_Completed(Server, AcceptArgs);
             }
 
-            Clients.Add(Count,new SocksClient(Count++, client));
+            Clients.Add(Count, new SocksClient(Count++, client));
         }
 
         private void AllocateArgs()
@@ -81,6 +81,19 @@ namespace EProxyClient.Net
         public void PushArgs(SocketAsyncEventArgs e)
         {
             ArgsStack.Push(e);
+        }
+
+        public void RemoveClient(short id)
+        {
+            lock (Clients)
+            {
+                if (Clients.ContainsKey(id))
+                {
+                    Clients.Remove(id);
+                    this.Tunnel.SendDisconnect(id);
+                }
+            }
+
         }
     }
 }
